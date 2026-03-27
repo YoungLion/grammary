@@ -9,6 +9,7 @@ interface TextEditorProps {
   onTextChange: (text: string) => void;
   onSuggestionClick: (suggestion: Suggestion) => void;
   isLoading: boolean;
+  isLoadingAdvanced?: boolean;
 }
 
 // Get the color for each suggestion type
@@ -33,7 +34,7 @@ const getSuggestionColor = (type: Suggestion["type"]) => {
 
 export const TextEditor = forwardRef<HTMLDivElement, TextEditorProps>(
   function TextEditor(
-    { suggestions, onTextChange, onSuggestionClick, isLoading },
+    { suggestions, onTextChange, onSuggestionClick, isLoading, isLoadingAdvanced },
     ref
   ) {
     const innerRef = useRef<HTMLDivElement>(null);
@@ -71,11 +72,11 @@ export const TextEditor = forwardRef<HTMLDivElement, TextEditorProps>(
     return (
       <div className="relative flex-1">
         {/* Loading indicator */}
-        {isLoading && (
+        {(isLoading || isLoadingAdvanced) && (
           <div className="absolute top-2 right-2 z-10">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground bg-background/80 px-2 py-1 rounded">
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-              Analyzing...
+              {isLoading ? "Checking..." : "Analyzing style..."}
             </div>
           </div>
         )}

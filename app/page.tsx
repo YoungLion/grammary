@@ -10,7 +10,7 @@ import { useGrammarCheck } from "@/hooks/use-grammar-check";
 import type { Suggestion, WritingGoals } from "@/types";
 
 export default function Home() {
-  const { checkText, result, isLoading, error } = useGrammarCheck();
+  const { checkText, result, isLoading, isLoadingAdvanced, error } = useGrammarCheck();
   const [goals, setGoals] = useState<WritingGoals>({
     audience: "general",
     intent: "inform",
@@ -120,6 +120,7 @@ export default function Home() {
                 onTextChange={handleTextChange}
                 onSuggestionClick={handleSuggestionClick}
                 isLoading={isLoading}
+                isLoadingAdvanced={isLoadingAdvanced}
               />
 
               {/* Suggestion Card */}

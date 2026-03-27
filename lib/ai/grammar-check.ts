@@ -1,5 +1,6 @@
 import OpenAI from "openai";
-import type { GrammarCheckResult, Suggestion, WritingGoals } from "@/types";
+import type { GrammarCheckResult, Suggestion, WritingGoals, ToneAnalysis } from "@/types";
+import { checkWithNlp, calculateStats } from "@/lib/nlp/grammar-check";
 
 function getOpenAIClient() {
   return new OpenAI({
@@ -8,67 +9,74 @@ function getOpenAIClient() {
   });
 }
 
-const GRAMMAR_CHECK_PROMPT = `You are an expert grammar and style checker. Analyze the given text and identify issues.
+const ADVANCED_CHECK_PROMPT = `You are an expert writing advisor. Analyze the given text for advanced writing improvements.
 
-For each issue found, provide:
-1. The type: one of "spelling", "grammar", "style", "clarity", "punctuation", "tone"
-2. A brief message describing the issue
-3. The original text that has the issue (exact text from the input)
-4. Suggested replacements (array of strings)
-5. An optional explanation of why it's an issue
+Focus on:
+1. Tone analysis (formal, casual, confident, tentative, etc.)
+2. Style improvements (word choice, conciseness, clarity)
+3. Sentence structure suggestions
 
-Also analyze:
-- The overall tone of the text
-- Writing statistics
+For each suggestion, provide:
+- type: "style", "clarity", or "tone"
+- message: brief description
+- original: the exact text to improve
+- replacements: suggested alternatives
+- explanation: why this improvement helps
 
-Respond in JSON format with this structure:
+Also provide a tone analysis.
+
+Respond in JSON format:
 {
   "suggestions": [
     {
       "id": "unique-id",
-      "type": "grammar",
-      "message": "Subject-verb agreement error",
-      "original": "the cats runs",
-      "replacements": ["the cats run"],
-      "explanation": "Plural subjects need plural verbs"
+      "type": "style",
+      "message": "Consider a more concise alternative",
+      "original": "in order to",
+      "replacements": ["to"],
+      "explanation": "'To' is more concise and direct"
     }
   ],
   "tone": {
     "primary": "formal",
     "confidence": 0.85,
     "description": "The text has a formal, professional tone"
-  },
-  "stats": {
-    "wordCount": 100,
-    "characterCount": 500,
-    "sentenceCount": 10,
-    "readingTime": "2 min read",
-    "readabilityScore": 65
   }
 }
 
 Important:
-- Only report actual issues, not false positives
-- The "original" field must be exact text from the input (this is critical for replacements)
-- Provide helpful, actionable suggestions
-- Calculate reading time based on ~200 words per minute
-- Readability score should be 0-100 (higher = easier to read)`;
+- Only suggest meaningful improvements, not trivial changes
+- The "original" field must be exact text from the input
+- Provide helpful explanations
+- Be conservative - don't suggest changes unless they genuinely improve the writing`;
 
-export async function checkGrammar(
+/**
+ * Fast NLP-based grammar check
+ * Returns immediately with spelling, basic grammar, readability
+ */
+export async function checkGrammarFast(text: string): Promise<GrammarCheckResult> {
+  const [suggestions, stats] = await Promise.all([
+    checkWithNlp(text),
+    Promise.resolve(calculateStats(text)),
+  ]);
+
+  return {
+    suggestions,
+    stats,
+    tone: undefined,
+  };
+}
+
+/**
+ * Advanced LLM-based writing analysis
+ * For tone, style, and context-aware suggestions
+ */
+export async function checkGrammarAdvanced(
   text: string,
   goals?: WritingGoals
-): Promise<GrammarCheckResult> {
+): Promise<{ suggestions: Suggestion[]; tone?: ToneAnalysis }> {
   if (!text.trim()) {
-    return {
-      suggestions: [],
-      stats: {
-        wordCount: 0,
-        characterCount: 0,
-        sentenceCount: 0,
-        readingTime: "0 min read",
-        readabilityScore: 100,
-      },
-    };
+    return { suggestions: [], tone: undefined };
   }
 
   const goalContext = goals
@@ -84,7 +92,7 @@ Please consider these goals when making suggestions.`
     const response = await openai.chat.completions.create({
       model: "glm-4.5-air",
       messages: [
-        { role: "system", content: GRAMMAR_CHECK_PROMPT + goalContext },
+        { role: "system", content: ADVANCED_CHECK_PROMPT + goalContext },
         { role: "user", content: text },
       ],
       temperature: 0.3,
@@ -102,30 +110,48 @@ Please consider these goals when making suggestions.`
       jsonContent = jsonMatch[1].trim();
     }
 
-    const result = JSON.parse(jsonContent) as GrammarCheckResult;
+    const result = JSON.parse(jsonContent) as {
+      suggestions: Suggestion[];
+      tone?: ToneAnalysis;
+    };
 
-    // Ensure each suggestion has an id
+    // Ensure each suggestion has an id and mark as advanced
     result.suggestions = result.suggestions.map((s: Suggestion, i: number) => ({
       ...s,
-      id: s.id || `suggestion-${i}-${Date.now()}`,
+      id: s.id || `llm-${i}-${Date.now()}`,
+      type: s.type || "style",
     }));
 
     return result;
   } catch (error) {
-    console.error("Grammar check error:", error);
-    // Return basic stats on error
-    const words = text.split(/\s+/).filter(Boolean);
-    const sentences = text.split(/[.!?]+/).filter(Boolean);
-
-    return {
-      suggestions: [],
-      stats: {
-        wordCount: words.length,
-        characterCount: text.length,
-        sentenceCount: sentences.length,
-        readingTime: `${Math.max(1, Math.ceil(words.length / 200))} min read`,
-        readabilityScore: 70,
-      },
-    };
+    console.error("Advanced grammar check error:", error);
+    return { suggestions: [], tone: undefined };
   }
+}
+
+/**
+ * Full grammar check (NLP + LLM)
+ * Combines both for comprehensive analysis
+ */
+export async function checkGrammar(
+  text: string,
+  goals?: WritingGoals
+): Promise<GrammarCheckResult> {
+  // Run both in parallel
+  const [fastResult, advancedResult] = await Promise.all([
+    checkGrammarFast(text),
+    checkGrammarAdvanced(text, goals),
+  ]);
+
+  // Merge suggestions (avoid duplicates by comparing original text)
+  const seenOriginals = new Set(fastResult.suggestions.map((s) => s.original.toLowerCase()));
+  const uniqueAdvanced = advancedResult.suggestions.filter(
+    (s) => !seenOriginals.has(s.original.toLowerCase())
+  );
+
+  return {
+    suggestions: [...fastResult.suggestions, ...uniqueAdvanced],
+    stats: fastResult.stats,
+    tone: advancedResult.tone,
+  };
 }
